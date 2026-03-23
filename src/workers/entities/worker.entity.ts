@@ -1,5 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
-import { Point } from 'geojson';
+// import { Point } from 'geojson';
 
 @Entity('workers')
 export class Worker {
@@ -15,8 +15,8 @@ export class Worker {
   @Column()
   skill: string; // 'plumber', 'electrician', etc.
 
-  @Column('geometry', { spatialFeatureType: 'Point', srid: 4326 })
-  location: Point; // { type: 'Point', coordinates: [lng, lat] }
+  // @Column('geometry', { spatialFeatureType: 'Point', srid: 4326 })
+  // location: Point; // { type: 'Point', coordinates: [lng, lat] }
 
   @Column()
   idNumber: string;
