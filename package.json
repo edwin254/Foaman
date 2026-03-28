@@ -1,7 +1,8 @@
 {
   "name": "foaman-worker-flow",
   "version": "1.0.0",
-  "description": "Foaman USSD Worker Matching Backend (Worker Flow Only)",
+  "description": "Foaman USSD Worker Matching Backend",
+  "type": "module",
   "scripts": {
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -9,21 +10,28 @@
     "test": "jest"
   },
   "dependencies": {
-    "@nestjs/common": "^10.0.0",
-    "@nestjs/core": "^10.0.0",
-    "@nestjs/platform-express": "^10.0.0",
-    "@nestjs/typeorm": "^10.0.0",
-    "typeorm": "^0.3.17",
-    "pg": "^8.11.3",
-    "@nestjs/config": "^3.1.0",
-    "class-validator": "^0.14.0",
+    "@nestjs/common": "^11.1.17",
+    "@nestjs/config": "^4.0.3",
+    "@nestjs/core": "^11.1.17",
+    "@nestjs/platform-express": "^11.1.17",
+    "@nestjs/typeorm": "^11.0.0",
+    "@prisma/adapter-pg": "^7.6.0",
+    "@prisma/client": "^7.6.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "africastalking": "^0.7.9",
+    "axios": "^1.13.6",
     "class-transformer": "^0.5.1",
-    "redis": "^4.6.13",
-    "axios": "^1.6.0"
+    "class-validator": "^0.15.1",
+    "dotenv": "^17.3.1",
+    "pg": "^8.20.0",
+    "redis": "^5.11.0",
+    "typeorm": "^0.3.28"
   },
   "devDependencies": {
-    "@nestjs/cli": "^10.0.0",
-    "@nestjs/schematics": "^10.0.0",
-    "typescript": "^5.3.0"
+    "@nestjs/cli": "^11.0.16",
+    "@nestjs/schematics": "^11.0.9",
+    "@types/pg": "^8.20.0",
+    "prisma": "^7.6.0",
+    "typescript": "^6.0.2"
   }
 }

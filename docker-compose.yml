@@ -1,5 +1,24 @@
 version: '3.8'
 services:
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    env_file:
+      - .env
+    environment:
+      # Override localhost values from .env to reach service containers
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+    command: sh -c "npm install && npm run start:dev"
+
   postgres:
     image: postgis/postgis:16-3.4
     restart: always
