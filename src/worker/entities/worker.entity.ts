@@ -1,32 +1,42 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
-// import { Point } from 'geojson';
 
 @Entity('workers')
 export class Worker {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column()
-  fullName: string;
+  fullName!: string;
 
   @Column({ unique: true })
-  phone: string;
+  phone!: string;
 
   @Column()
-  skill: string; // 'plumber', 'electrician', etc.
-
-  // @Column('geometry', { spatialFeatureType: 'Point', srid: 4326 })
-  // location: Point; // { type: 'Point', coordinates: [lng, lat] }
+  skill!: string; // 'plumber', 'electrician', etc.
 
   @Column()
-  idNumber: string;
+  idNumber!: string;
 
   @Column({ default: false })
-  verified: boolean;
+  verified!: boolean;
 
   @Column({ default: true })
-  available: boolean;
+  available!: boolean;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  lastJobTimestamp: Date;
+  lastJobTimestamp!: Date;
+  
+  // rating system
+  @Column({ default: 0 })
+  rating!: number;
+
+  @Column({ default: 0 })
+  numReviews!: number;
+
+  @Column({ default: 0 })
+  numJobsCompleted!: number;
+
+  @Column({ default: 0 })
+  numJobsCancelled!: number;
+
 }

@@ -1,15 +1,15 @@
-import { IsString, IsNotEmpty, IsOptional, isString } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
 
 export class MatchFundiDto {
   @IsString()
   @IsNotEmpty()
-  public readonlyskill: string;
+  public readonly skill!: string;
 
   @IsString()
   @IsNotEmpty()
-  public readonly location: string;
+  public readonly location!: string;
 
   @IsString()
   @IsOptional()
-  description?: string;
+  public readonly description?: string;
 }
