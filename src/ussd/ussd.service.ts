@@ -1,22 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import { ussdMenus } from '../config/ussd-menu.config';
-import { PrismaService } from '../../prisma/prisma.service';
-import { WorkerService } from '../worker/worker.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { WorkerMatchingService } from '../worker/services/worker.service';
 
 @Injectable()
 export class UssdService {
   constructor(
     private prisma: PrismaService,
-    private workerService: WorkerService,
+    private workerService: WorkerMatchingService,
     private cache: any // Assume a Redis/Cache implementation
   ) {}
 
   async process(sessionId: string, phone: string, text: string): Promise<string> {
-    const parts = text.split('*');
-    const latestInput = parts[parts.length - 1];
-
     // 1. Session Init
     let session = await this.cache.get(sessionId) || { currentStep: 'welcome', data: {} };
+
+    // Africa's Talking sends empty text on the first request in a session.
+    // For that case, render the current menu directly.
+    if (!text || text.trim() === '') {
+      const firstScreen = ussdMenus[session.currentStep];
+      await this.cache.set(sessionId, session);
+      return firstScreen.type === 'final' ? `END ${firstScreen.text}` : `CON ${firstScreen.text}`;
+    }
+
+    const parts = text.split('*');
+    const latestInput = parts[parts.length - 1];
 
     // 2. Handle Logic based on Screen Type
     const currentScreen = ussdMenus[session.currentStep];
@@ -55,7 +63,7 @@ export class UssdService {
         },
       });
       // Trigger matching engine
-      await this.workerService.findAndNotifyWorkers(job.id);
+      await (this.workerService as any).findAndNotifyWorkers?.(job.id);
     }
   }
 }
