@@ -4,29 +4,26 @@ import { Repository } from 'typeorm';
 import { Worker } from '../entities/worker.entity';
 import { SmsService } from '../../common/services/sms.service';
 import { MatchFundiDto } from '../dto/match-fundi.dto';
-import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class WorkerMatchingService {
   constructor(
     @InjectRepository(Worker) private workerRepo: Repository<Worker>,
-    private smsService: SmsService,private prisma: PrismaService
+    private smsService: SmsService,
   ) {}
+
   async createWorker(phone: string, data: any) {
-    return this.prisma.user.create({
-      data: {
-        phone,
-        fullName: data.fullName,
-        location: data.location,
-        role: 'WORKER',
-        workerProfile: {
-          create: {
-            idNumber: data.idNumber,
-            skill: data.skill,
-          },
-        },
-      },
+    const worker = this.workerRepo.create({
+      phone,
+      fullName: data.fullName,
+      idNumber: data.idNumber,
+      skill: data.skill,
+      // Optional flags if provided; otherwise entity defaults apply
+      verified: data.verified,
+      available: data.available,
     });
+
+    return this.workerRepo.save(worker);
   }
 
   async matchFundi(dto: MatchFundiDto): Promise<string> {
@@ -37,11 +34,8 @@ export class WorkerMatchingService {
       .where('worker.skill = :skill', { skill })
       .andWhere('worker.verified = true')
       .andWhere('worker.available = true')
-      .orderBy(
-        `ST_Distance(worker.location, ST_MakePoint(:lng, :lat)::geography)`,
-        'ASC',
-      )
-      .setParameters({ lng: location.lng, lat: location.lat })
+      // No geo field on Worker entity yet, so use least-recently-assigned worker.
+      .orderBy('worker.lastJobTimestamp', 'ASC')
       .limit(10)
       .getMany();
 
@@ -54,7 +48,7 @@ export class WorkerMatchingService {
     for (const w of top5) {
       await this.smsService.send(
         w.phone,
-        `New job request (${description || skill}) in your area.\n1. Confirm\n2. Decline\nRef: ${jobRef}`,
+        `New job request (${description || skill}) in ${location}.\n1. Confirm\n2. Decline\nRef: ${jobRef}`,
       );
     }
 
