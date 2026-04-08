@@ -5,6 +5,7 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - ./dist:/app/dist
     env_file:
       - .env
     environment:
