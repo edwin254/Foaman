@@ -1,9 +1,14 @@
-import { Global, Module } from '@nestjs/common';
-import { UssdService } from '../ussd/ussd.service';
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
+import { WorkerModule } from '../worker/worker.module';
+import { UssdController } from './ussd.controller';
+import { SessionStoreService } from './session-store.service';
+import { UssdService } from './ussd.service';
 
-@Global() // This makes UssdService available everywhere without re-importing the module
 @Module({
-  providers: [UssdService],
+  imports: [PrismaModule, WorkerModule],
+  controllers: [UssdController],
+  providers: [UssdService, SessionStoreService],
   exports: [UssdService],
 })
 export class UssdModule {}

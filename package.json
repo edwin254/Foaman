@@ -2,7 +2,6 @@
   "name": "foaman-worker-flow",
   "version": "1.0.0",
   "description": "Foaman USSD Worker Matching Backend",
-  "type": "module",
   "scripts": {
     "start": "nest start",
     "start:dev": "nest start --watch",
