@@ -2,6 +2,7 @@
   "name": "foaman-worker-flow",
   "version": "1.0.0",
   "description": "Foaman USSD Worker Matching Backend",
+  "type": "commonjs",
   "scripts": {
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -31,6 +32,6 @@
     "@nestjs/schematics": "^11.0.9",
     "@types/pg": "^8.20.0",
     "prisma": "^7.6.0",
-    "typescript": "^6.0.2"
+    "typescript": "^5.7.3"
   }
 }

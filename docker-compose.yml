@@ -1,11 +1,11 @@
 services:
   web:
-    image: node:20-alpine
-    user: "${UID:-1000}:${GID:-1000}"
+    image: node:20.19-alpine
+    # user: "${UID:-1000}:${GID:-1000}"
     working_dir: /app
     volumes:
       - ./:/app
-      - ./node_modules:/app/node_modules
+      - /app/node_modules
       # - ./dist:/app/dist
     env_file:
       - .env
