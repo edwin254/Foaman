@@ -2,18 +2,19 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseConfig } from './config/database.config';
-import { Worker } from './workers/entities/worker.entity';
-import { WorkerMatchingService } from './workers/services/worker-matching.service';
-import { UssdController } from './workers/controllers/ussd.controller';
-import { SmsService } from './common/services/sms.service';
+import { PrismaModule } from './prisma/prisma.module';
+import { UssdModule } from './ussd/ussd.module';
+import { UsersModule } from './users/users.module';
+import { WorkerModule } from './worker/worker.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot(databaseConfig),
-    TypeOrmModule.forFeature([Worker]),
+    PrismaModule,
+    WorkerModule,
+    UssdModule,
+    UsersModule,
   ],
-  controllers: [UssdController],
-  providers: [WorkerMatchingService, SmsService],
 })
 export class AppModule {}

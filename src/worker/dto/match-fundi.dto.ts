@@ -3,12 +3,13 @@ import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
 export class MatchFundiDto {
   @IsString()
   @IsNotEmpty()
-  skill: string;
+  public readonly skill!: string;
 
+  @IsString()
   @IsNotEmpty()
-  location: { lat: number; lng: number };
+  public readonly location!: string;
 
   @IsString()
   @IsOptional()
-  description?: string;
+  public readonly description?: string;
 }
