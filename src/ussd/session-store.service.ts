@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 interface UssdSession {
   currentStep: string;
-  data: Record<string, string>;
+  data: Record<string, string | string[]>;
 }
 
 @Injectable()
