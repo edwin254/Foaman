@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { ussdMenus } from './ussd-menu.config.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+import { ussdMenus } from '../config/ussd-menu.config';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class UssdService {
