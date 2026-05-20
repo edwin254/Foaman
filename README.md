@@ -5,105 +5,99 @@ NestJS backend for Foaman’s USSD worker-matching flow. It exposes a webhook fo
 ## Architecture
 
 ```
-Africa's Talking Sandbox ──POST──► zrok2 public URL ──► NestJS :3000
-                                         │
-                    ┌────────────────────┼────────────────────┐
-                    ▼                    ▼                    ▼
-            UssdController        UssdService         WorkerMatchingService
-            POST /ussd            (menu state)        (match + notify)
-                    │                    │                    │
-                    │            SessionStoreService          │
-                    │            (in-memory)                   │
-                    │                    │                    ▼
-                    │            ussd-menu.config.ts    SmsService (stub)
-                    │                    │
-                    └──────── handleFinalState ──────────┘
-                              │                    │
-                         Prisma (Job, User)   TypeORM (workers)
-                              │                    │
-                              └────── Postgres (foaman_worker) ──────┘
+Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
+                                │
+           ┌────────────────────┼────────────────────┐
+           ▼                    ▼                    ▼
+   UssdController        UssdService         WorkerMatchingService
+   POST /ussd            (menu state)        (match + notify)
+           │                    │                    │
+           │            SessionStoreService          │
+           │            (in-memory locally)         │
+           │                    │                    ▼
+           │            ussd-menu.config.ts    SmsService
+           │                    │
+           └──────── handleFinalState ──────────┘
+                     │                    │
+                Prisma (Job, User, Skill)  TypeORM (workers)
+                     │                    │
+                     └────── Postgres ──────┘
 ```
 
 | Layer | Location | Responsibility |
 |-------|----------|----------------|
-| Entry | `src/main.ts` | Boots NestJS on port `3000`, global validation |
+| Entry | `src/main.ts` | Boots NestJS on port `3000` |
 | HTTP | `src/ussd/ussd.controller.ts` | `POST /ussd` (AT webhook), `POST /ussd/match` (dev API) |
-| USSD engine | `src/ussd/ussd.service.ts` | Session steps, `CON`/`END` responses, final-state side effects |
-| Menu config | `src/config/ussd-menu.config.ts` | All USSD screens (choice / input / final) |
-| Matching | `src/worker/services/worker.service.ts` | Fundi lookup, SMS notify, job assignment |
-| SMS | `src/common/services/sms.service.ts` | Africa’s Talking integration (currently logs only) |
-| Sessions | `src/ussd/session-store.service.ts` | In-process `Map` (Redis in compose is not wired yet) |
+| USSD engine | `src/ussd/ussd.service.ts` | Session steps, `CON`/`END` responses |
+| Menu config | `src/config/ussd-menu.config.ts` | All USSD screens |
+| Matching | `src/worker/services/worker.service.ts` | Fundi lookup, SMS, job assignment |
+| SMS | `src/common/services/sms.service.ts` | Africa’s Talking (logs only until wired) |
+| Sessions | `src/ussd/session-store.service.ts` | In-memory `Map` (Redis planned) |
 
-The app uses **two data access layers** on the same Postgres database:
+**Data access:** Prisma (`User`, `Skill`, `Worker`, `Job`) and TypeORM (`workers` table for matching) share one Postgres database. USSD worker signup uses TypeORM; job posting uses Prisma.
 
-- **Prisma** (`prisma/schema.prisma`) — `User`, `Worker` (profile linked to user), `Job` for customer job posting via USSD.
-- **TypeORM** (`src/worker/entities/worker.entity.ts`) — `workers` table for fundi registration and matching queries.
+### Entry points
 
-Worker onboarding via USSD writes to TypeORM; job posting writes to Prisma and then triggers matching.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/ussd` | Africa’s Talking callback (`sessionId`, `phoneNumber`, `serviceCode`, `text`) |
+| `POST` | `/ussd/match` | Direct matching API (local/dev testing) |
 
-## Entry points
-
-| Method | Path | Handler | Purpose |
-|--------|------|---------|---------|
-| `POST` | `/ussd` | `UssdController.handleUssd` | Africa’s Talking USSD callback (`sessionId`, `phoneNumber`, `serviceCode`, `text`) |
-| `POST` | `/ussd/match` | `UssdController.handleMatch` | Direct fundi matching (JSON body, for local testing) |
-
-Application bootstrap: `src/main.ts` → `AppModule` (`src/app.module.ts`).
-
-## Database schema
-
-**Prisma** (`prisma/schema.prisma`):
+### Database schema (Prisma)
 
 | Model | Key fields |
 |-------|------------|
-| `User` | `phone` (unique), `fullName`, `location`, `role` (`CUSTOMER`, `WORKER`, `SUPPLIER`, `ADMIN`) |
-| `Worker` | `userId`, `idNumber`, `skill`, `isVerified` — 1:1 with `User` |
-| `Job` | `customerId`, `skillNeeded`, `location`, `description`, `status` (`PENDING`, `MATCHED`, …) |
+| `User` | `phone`, `fullName`, `location`, `role` |
+| `Skill` | `name` (unique catalog, seeded) |
+| `Worker` | `userId`, `idNumber`, `skill`, `isVerified` |
+| `Job` | `customerId`, `skillNeeded`, `location`, `description`, `status` |
 
-**TypeORM** (`workers` table, auto-created via `synchronize: true`):
+TypeORM `workers` table: `phone`, `fullName`, `skill`, `idNumber`, `verified`, `available`, `lastJobTimestamp`, ratings/counters.
 
-| Column | Notes |
-|--------|-------|
-| `phone`, `fullName`, `skill`, `idNumber` | Fundi profile |
-| `verified`, `available` | Matching filters |
-| `lastJobTimestamp`, `rating`, job counters | Round-robin / stats |
+### NPM scripts
 
-Apply Prisma tables after changing the schema:
+| Script | Command | Use |
+|--------|---------|-----|
+| `db:generate` | `prisma generate` | Regenerate client after schema changes |
+| `db:push` | `prisma db push` | Apply schema to DB (local/dev) |
+| `db:seed` | `tsx prisma/prisma.seed.ts` | Seed default skills |
 
-```bash
-npx prisma db push
-npx prisma generate
-```
+---
 
-## Core business logic
+## Local vs production
 
-| Concern | File |
-|---------|------|
-| USSD state machine & AT `CON`/`END` formatting | `src/ussd/ussd.service.ts` |
-| Menu definitions & routing | `src/config/ussd-menu.config.ts` |
-| Worker registration (USSD final `workerSuccess`) | `WorkerMatchingService.createWorker` in `src/worker/services/worker.service.ts` |
-| Job create + match + notify (USSD final `jobPosted`) | `UssdService.handleFinalState` + `WorkerMatchingService.findAndNotifyWorkers` |
-| Fundi matching algorithm | `WorkerMatchingService.matchFundi` — verified + available workers by skill, top 5 SMS, assign first |
-| SMS notifications | `src/common/services/sms.service.ts` |
+| Topic | Local development | Production |
+|-------|-------------------|------------|
+| **Purpose** | USSD sandbox testing, menu dev, matching API | Live USSD short code, real users |
+| **Public URL** | [zrok2](https://docs.zrok.io/docs/zrok/) tunnel to `localhost:3000` | HTTPS on your domain (load balancer / reverse proxy) — **no zrok** |
+| **Africa’s Talking** | [Sandbox](https://sandbox.africastalking.com/) credentials | Production app username + API key |
+| **USSD callback** | `https://<zrok2-host>/ussd` | `https://<your-api-domain>/ussd` |
+| **Postgres** | Docker Compose (`postgres` service) or local install | Managed Postgres (RDS, Supabase, etc.) |
+| **Redis** | Optional via Compose; not required yet | Recommended when session store is wired |
+| **Schema changes** | `npm run db:push` | `prisma migrate deploy` (use migrations, not `db push`) |
+| **TypeORM** | `synchronize: true` (auto-creates `workers`) | Set `synchronize: false`; use migrations |
+| **Prisma client** | `npm run db:generate` (Node **≥ 20.19**, or Docker — see below) | Same, in CI/CD before `npm run build` |
+| **Run mode** | `npm run start:dev` or `docker compose up web` | `npm run build` then `npm run start` |
+| **SMS** | Logged to console | Real AT SMS API in `SmsService` |
 
 ---
 
 ## Local setup
 
+For day-to-day development: sandbox USSD, zrok2 tunnel, and a local Postgres instance.
+
 ### Prerequisites
 
-- Node.js 20+
+- **Node.js ≥ 20.19** (required for `prisma generate` on the host; Prisma 7 fails on 20.18 with an ESM error)
 - Docker & Docker Compose
-- [zrok2 CLI](https://docs.zrok.io/docs/zrok/) (v2 — **not** the legacy `zrok` v1 binary)
-- Free account at [myzrok.io](https://myzrok.io/) (hosted zrok2; no self-hosted controller required for dev)
+- [zrok2 CLI](https://docs.zrok.io/docs/zrok/) — **not** legacy `zrok` v1 / ngrok
+- [myzrok.io](https://myzrok.io/) account (free hosted zrok2)
 
 ### 1. Environment
 
 ```bash
 cp .env_example .env
 ```
-
-Set at minimum:
 
 ```env
 DB_HOST=localhost
@@ -115,69 +109,75 @@ DATABASE_URL=postgresql://foaman:foaman123@localhost:5432/foaman_worker
 
 AFRICASTALKING_USERNAME=sandbox
 AFRICASTALKING_APIKEY=your_sandbox_api_key
+
+REDIS_URL=redis://localhost:6379
 ```
 
-### 2. Start Postgres and Redis
+### 2. Database (Docker)
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-(Postgres image includes PostGIS; the worker flow does not use geo queries yet.)
-
-### 3. Install dependencies and sync schema
+### 3. Install, schema, seed
 
 ```bash
 npm install
-npx prisma db push
-npx prisma generate
+```
+
+**Prisma generate** (pick one):
+
+```bash
+# Host (Node ≥ 20.19)
+npm run db:generate
+
+# Or via Docker if host Node is 20.18
+docker compose run --rm -e DATABASE_URL=postgresql://foaman:foaman123@postgres:5432/foaman_worker web npx prisma generate
+```
+
+```bash
+npm run db:push
+npm run db:seed
 npm run start:dev
 ```
 
-The API listens at `http://localhost:3000`. TypeORM creates the `workers` table on first boot (`synchronize: true`).
+API: `http://localhost:3000`. TypeORM creates the `workers` table on first boot.
 
-### 4. Expose localhost with zrok2 (Africa’s Talking sandbox)
-
-Africa’s Talking must reach your machine over HTTPS. Use **zrok2**, not ngrok and not the v1 `zrok` command.
-
-**Install and enable zrok2** (one-time):
+**All-in-one with Docker** (app + DB + auto `prisma generate`):
 
 ```bash
-# Install per https://docs.zrok.io/docs/zrok/ — package name is zrok2
-zrok2 enable <your-account-token-from-myzrok.io>
+docker compose up web
 ```
 
-**Share the NestJS port** (keep this terminal open while testing USSD):
+Uses `DB_HOST=postgres` from `docker-compose.yml` overrides.
+
+### 4. zrok2 + Africa’s Talking sandbox
+
+AT must POST to a public HTTPS URL. On your machine, expose port 3000 with **zrok2**:
 
 ```bash
+zrok2 enable <account-token-from-myzrok.io>
 zrok2 share public 3000
+# optional: zrok2 share public --headless 3000
 ```
 
-Copy the public URL printed by the CLI (e.g. `https://….share.zrok.io`). For a stable URL in scripts:
+In [USSD sandbox](https://sandbox.africastalking.com/):
 
-```bash
-zrok2 share public --headless 3000
-```
-
-**Configure Africa’s Talking sandbox:**
-
-1. Open [USSD sandbox](https://sandbox.africastalking.com/).
-2. Create or edit your USSD channel / service.
-3. Set the **callback URL** to your zrok2 URL with the USSD path:
-
-   ```
-   https://<your-zrok2-host>/ussd
-   ```
-
-4. Use the sandbox test dial code to exercise menus. The backend expects `POST` with `sessionId`, `phoneNumber`, `serviceCode`, and `text` (form body), and responds with plain text `CON …` or `END …`.
+1. Create or edit your USSD channel.
+2. Set callback URL: `https://<your-zrok2-host>/ussd`
+3. Dial the sandbox test code.
 
 **Notes:**
 
-- Use the `zrok2` binary only. Commands like `zrok share` belong to v1 and will not work with myzrok.io / api-v2.
-- The share is ephemeral: it stops when you press `Ctrl+C`. For a long-running tunnel, use the [zrok agent](https://docs.zrok.io/docs/guides/agent/).
-- Self-hosting a zrok2 controller is optional (`zrok-setup.sh.sh` is for operators running their own instance, not required for myzrok.io dev).
+- Commands are `zrok2 …`, not `zrok share` (v1).
+- The tunnel stops when you close the terminal; use the [zrok agent](https://docs.zrok.io/docs/guides/agent/) for a persistent dev tunnel.
+- `zrok-setup.sh.sh` is only for **self-hosted** zrok2 controllers, not myzrok.io dev.
 
-### 5. Test matching without USSD
+### 5. Quick tests
+
+**USSD flow:** use the sandbox dial code after zrok2 is running.
+
+**Matching API (no USSD):**
 
 ```http
 POST http://localhost:3000/ussd/match
@@ -192,27 +192,115 @@ Content-Type: application/json
 
 ---
 
+## Production setup
+
+Production runs the same NestJS app on infrastructure with a **stable public HTTPS endpoint** and **Africa’s Talking production** credentials. You do not use zrok2 in prod.
+
+### 1. Infrastructure checklist
+
+- [ ] Postgres (managed, backups, SSL)
+- [ ] App host (VM, container platform, or PaaS) with TLS termination
+- [ ] Process manager or orchestrator (`systemd`, Kubernetes, etc.)
+- [ ] Secrets store for env vars (not committed `.env`)
+- [ ] (Recommended) Redis for USSD sessions when implemented
+
+### 2. Environment variables
+
+Set on the server (example names — adjust to your host):
+
+```env
+NODE_ENV=production
+
+DB_HOST=<managed-postgres-host>
+DB_PORT=5432
+DB_USERNAME=<user>
+DB_PASSWORD=<secret>
+DB_DATABASE=foaman_worker
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/foaman_worker?sslmode=require
+
+AFRICASTALKING_USERNAME=<production_username>
+AFRICASTALKING_APIKEY=<production_api_key>
+
+REDIS_URL=redis://<redis-host>:6379
+```
+
+### 3. Database
+
+1. Create the production database and user with least privilege.
+2. Use **Prisma migrations** (not `db push`):
+
+   ```bash
+   npx prisma migrate deploy
+   npm run db:generate
+   ```
+
+3. Seed skills once (if needed):
+
+   ```bash
+   npm run db:seed
+   ```
+
+4. **Disable TypeORM auto-sync** in `src/config/database.config.ts`:
+
+   ```ts
+   synchronize: false,
+   ```
+
+   Manage the `workers` table via migrations or a one-time DDL aligned with `src/worker/entities/worker.entity.ts`.
+
+### 4. Build and run
+
+```bash
+npm ci
+npm run db:generate
+npm run build
+npm run start
+```
+
+Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` to port `3000`.
+
+### 5. Africa’s Talking (production)
+
+1. Register your production USSD service in the [Africa’s Talking dashboard](https://account.africastalking.com/).
+2. Set callback URL to your public API:
+
+   ```
+   https://<your-production-domain>/ussd
+   ```
+
+3. Implement real SMS in `src/common/services/sms.service.ts` (replace console logging).
+4. Confirm responses use `CON` / `END` plain text as required by AT.
+
+### 6. Security and ops
+
+| Item | Recommendation |
+|------|----------------|
+| TLS | Terminate HTTPS at the edge; do not expose plain HTTP publicly |
+| Secrets | Rotate `AFRICASTALKING_APIKEY` and DB passwords independently |
+| Logging | Log `sessionId` / `phoneNumber` carefully; avoid PII in public logs |
+| Health | Monitor process restarts and DB connectivity |
+| Dev endpoints | Do not expose `POST /ussd/match` publicly without auth |
+
+---
+
 ## Updating `ussd-menu.config.ts`
 
-USSD menus are configuration-driven from `src/config/ussd-menu.config.ts`.
+Menus live in `src/config/ussd-menu.config.ts`.
 
-Each screen has a key and a type:
+| Type | Behavior |
+|------|----------|
+| `choice` | Numbered input routed via `options` |
+| `input` | Free text → `property`, then `next` |
+| `final` | Terminal screen → `END …` |
 
-- `choice`: numbered input (`1`, `2`, `0`) routed via `options`
-- `input`: free text stored in `property`, then `next`
-- `final`: terminal screen; service returns `END …`
+Africa’s Talking rules:
 
-Africa’s Talking session rules:
+- First request: empty `text` → `CON` + first menu
+- Mid-flow → `CON …`
+- End → `END …`
+- Avoid special characters in menu text
 
-- First request has empty `text` → respond with `CON` and the first menu
-- Ongoing steps → `CON …`
-- Last step → `END …`
-- Avoid special characters in menu text for telco compatibility
-
-### Example: Add “Track Application” under Main Menu
-
-1. In `main`, add option `8` and update `main.text`.
-2. Add `trackAppPhone` (input) and `trackAppResult` (final).
+### Example: “Track Application” on main menu
 
 ```ts
 trackAppPhone: {
@@ -229,7 +317,7 @@ trackAppResult: {
 
 ## Roadmap
 
-- Wire `SmsService` to Africa’s Talking sandbox API
-- Use Redis for USSD session persistence
-- Unify Prisma `Worker` and TypeORM `workers` into one model
-- Add Supplier and Ready-to-Occupy flows
+- Wire `SmsService` to Africa’s Talking (sandbox + production)
+- Redis-backed USSD sessions
+- Unify Prisma `Worker` and TypeORM `workers`
+- Supplier and Ready-to-Occupy flows
