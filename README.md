@@ -28,6 +28,7 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
 |-------|----------|----------------|
 | Entry | `src/main.ts` | Boots NestJS on port `3000` |
 | HTTP | `src/ussd/ussd.controller.ts` | `POST /ussd` (AT webhook), `POST /ussd/match` (dev API) |
+| Onboarded users | `src/users/users.controller.ts` | `GET /onboarded` (no auth yet — dev/ops) |
 | USSD engine | `src/ussd/ussd.service.ts` | Session steps, `CON`/`END` responses |
 | Menu config | `src/config/ussd-menu.config.ts` | All USSD screens |
 | Matching | `src/worker/services/worker.service.ts` | Fundi lookup, SMS, job assignment |
@@ -42,13 +43,14 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
 |--------|------|---------|
 | `POST` | `/ussd` | Africa’s Talking callback (`sessionId`, `phoneNumber`, `serviceCode`, `text`) |
 | `POST` | `/ussd/match` | Direct matching API (local/dev testing) |
+| `GET` | `/onboarded` | List USSD-onboarded users (`?role=CUSTOMER` optional). **No auth yet.** |
 
 ### Database schema (Prisma)
 
 | Model | Key fields |
 |-------|------------|
 | `User` | `phone`, `fullName`, `location`, `role` |
-| `Skill` | `name` (unique catalog, seeded) |
+| `Skill` | `name` (unique catalog; populated via USSD lookup or optional `db:seed`) |
 | `Worker` | `userId`, `idNumber`, `skill`, `isVerified` |
 | `Job` | `customerId`, `skillNeeded`, `location`, `description`, `status` |
 
@@ -60,7 +62,7 @@ TypeORM `workers` table: `phone`, `fullName`, `skill`, `idNumber`, `verified`, `
 |--------|---------|-----|
 | `db:generate` | `prisma generate` | Regenerate client after schema changes |
 | `db:push` | `prisma db push` | Apply schema to DB (local/dev) |
-| `db:seed` | `tsx prisma/prisma.seed.ts` | Seed default skills |
+| `db:seed` | `tsx prisma/prisma.seed.ts` | Optional: preload skill catalog (not required for onboarding) |
 
 ---
 
@@ -137,9 +139,10 @@ docker compose run --rm -e DATABASE_URL=postgresql://foaman:foaman123@postgres:5
 
 ```bash
 npm run db:push
-npm run db:seed
 npm run start:dev
 ```
+
+Skill names are created on the fly during USSD skill lookup when no catalog match exists. Optional catalog preload: `npm run db:seed`.
 
 API: `http://localhost:3000`. TypeORM creates the `workers` table on first boot.
 
@@ -173,7 +176,38 @@ In [USSD sandbox](https://sandbox.africastalking.com/):
 - The tunnel stops when you close the terminal; use the [zrok agent](https://docs.zrok.io/docs/guides/agent/) for a persistent dev tunnel.
 - `zrok-setup.sh.sh` is only for **self-hosted** zrok2 controllers, not myzrok.io dev.
 
-### 5. Quick tests
+### 5. View onboarded users (no auth yet)
+
+After users complete customer or worker onboarding via USSD:
+
+```http
+GET http://localhost:3000/onboarded
+GET http://localhost:3000/onboarded?role=WORKER
+GET http://localhost:3000/onboarded?role=CUSTOMER
+```
+
+Example response:
+
+```json
+{
+  "count": 1,
+  "users": [
+    {
+      "id": "clx…",
+      "phone": "+2547…",
+      "fullName": "Jane Doe",
+      "location": "Roysambu",
+      "role": "CUSTOMER",
+      "createdAt": "2026-05-20T…",
+      "workerProfile": null
+    }
+  ]
+}
+```
+
+Authentication will be added before exposing this in production.
+
+### 6. Quick tests
 
 **USSD flow:** use the sandbox dial code after zrok2 is running.
 
@@ -234,13 +268,7 @@ REDIS_URL=redis://<redis-host>:6379
    npm run db:generate
    ```
 
-3. Seed skills once (if needed):
-
-   ```bash
-   npm run db:seed
-   ```
-
-4. **Disable TypeORM auto-sync** in `src/config/database.config.ts`:
+3. **Disable TypeORM auto-sync** in `src/config/database.config.ts`:
 
    ```ts
    synchronize: false,
@@ -279,7 +307,7 @@ Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` to 
 | Secrets | Rotate `AFRICASTALKING_APIKEY` and DB passwords independently |
 | Logging | Log `sessionId` / `phoneNumber` carefully; avoid PII in public logs |
 | Health | Monitor process restarts and DB connectivity |
-| Dev endpoints | Do not expose `POST /ussd/match` publicly without auth |
+| Dev endpoints | Restrict `GET /onboarded` and `POST /ussd/match` behind auth before production |
 
 ---
 
