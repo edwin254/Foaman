@@ -1,26 +1,43 @@
 import { Injectable } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { ussdMenus } from '../config/ussd-menu.config';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionStoreService } from './session-store.service';
 
 @Injectable()
 export class UssdService {
   constructor(
-    private prisma: PrismaService, 
-    private cache: any // Replace with your Redis/Cache manager instance
+    private readonly prisma: PrismaService,
+    private readonly cache: SessionStoreService,
   ) {}
 
   async processRequest(sessionId: string, phone: string, text: string): Promise<string> {
+    if (!text || text.trim() === '') {
+      const session = { currentStep: 'welcome', data: {} };
+      await this.cache.set(sessionId, session);
+      return `CON ${ussdMenus.welcome.text}`;
+    }
+
     const parts = text.split('*');
     const latestInput = parts[parts.length - 1];
 
-    let session = await this.cache.get(sessionId) || { currentStep: 'welcome', data: {} };
-    let currentScreen = ussdMenus[session.currentStep];
+    const session = (await this.cache.get(sessionId)) ?? { currentStep: 'welcome', data: {} };
+    const currentScreen = ussdMenus[session.currentStep];
+
+    if (!currentScreen) {
+      await this.cache.delete(sessionId);
+      return 'END Session expired. Please dial again.';
+    }
 
     // 1. Process standard steps
     if (currentScreen.type === 'input') {
       session.data[currentScreen.property!] = latestInput;
       session.currentStep = currentScreen.next!;
-    } 
+
+      if (currentScreen.next === 'mainMenu' && typeof session.data.fullName === 'string') {
+        await this.saveCustomerProfile(phone, session.data);
+      }
+    }
     else if (currentScreen.type === 'choice') {
       const nextKey = currentScreen.options?.[parseInt(latestInput)];
       if (!nextKey) return `CON Invalid Choice.\n${currentScreen.text}`;
@@ -28,7 +45,7 @@ export class UssdService {
     }
     else if (currentScreen.type === 'dynamic-lookup') {
       const selectionIndex = parseInt(latestInput) - 1;
-      const cachedOptions = session.data[`${session.currentStep}_options`External];
+      const cachedOptions = session.data[`${session.currentStep}_options`] as string[] | undefined;
       
       if (!cachedOptions || !cachedOptions[selectionIndex]) {
         const structuralMenu = await this.buildLookupMenu(session);
@@ -41,6 +58,11 @@ export class UssdService {
 
     // 2. Fetch the target screen state
     const nextScreen = ussdMenus[session.currentStep];
+
+    if (!nextScreen) {
+      await this.cache.delete(sessionId);
+      return 'END This option is not available right now. Please try again later.';
+    }
 
     if (nextScreen.type === 'final') {
       await this.saveFinalPayload(session.currentStep, phone, session.data);
@@ -100,25 +122,69 @@ export class UssdService {
     return responseMenu;
   }
 
-  private async saveFinalPayload(state: string, phone: string, data: any) {
+  private async saveCustomerProfile(
+    phone: string,
+    data: Record<string, string | string[]>,
+  ) {
+    const fullName = this.readString(data, 'fullName');
+    const location = this.readString(data, 'location');
+
+    await this.prisma.user.upsert({
+      where: { phone },
+      create: {
+        phone,
+        fullName,
+        location,
+        role: Role.CUSTOMER,
+      },
+      update: {
+        fullName,
+        location,
+        role: Role.CUSTOMER,
+      },
+    });
+  }
+
+  private async saveFinalPayload(
+    state: string,
+    phone: string,
+    data: Record<string, string | string[]>,
+  ) {
     if (state === 'workerSuccess') {
-      await this.prisma.worker.create({
-        data: {
-          user: { connectOrCreate: { where: { phone }, create: { phone } } },
-          idNumber: data.idNumber,
-          skill: data.confirmedSkill, 
-        }
+      const user = await this.prisma.user.upsert({
+        where: { phone },
+        create: { phone, role: Role.WORKER },
+        update: { role: Role.WORKER },
+      });
+
+      await this.prisma.worker.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          idNumber: this.readString(data, 'idNumber'),
+          skill: this.readString(data, 'confirmedSkill'),
+        },
+        update: {
+          idNumber: this.readString(data, 'idNumber'),
+          skill: this.readString(data, 'confirmedSkill'),
+        },
       });
     }
+
     if (state === 'jobPosted') {
       await this.prisma.job.create({
         data: {
-          customer: { connectOrCreate: { where: { phone }, create: { phone } } },
-          skillNeeded: data.matchedSkill, 
-          location: data.jobLocation,
-          description: `Requested via USSD DB lookup`,
-        }
+          customer: { connectOrCreate: { where: { phone }, create: { phone, role: Role.CUSTOMER } } },
+          skillNeeded: this.readString(data, 'matchedSkill'),
+          location: this.readString(data, 'jobLocation'),
+          description: 'Requested via USSD',
+        },
       });
     }
+  }
+
+  private readString(data: Record<string, string | string[]>, key: string): string {
+    const value = data[key];
+    return typeof value === 'string' ? value : '';
   }
 }
