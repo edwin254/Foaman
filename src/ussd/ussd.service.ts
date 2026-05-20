@@ -150,13 +150,25 @@ export class UssdService {
     phone: string,
     data: Record<string, string | string[]>,
   ) {
+    // --- 1. WORKER ONBOARDING SUCCESS ---
     if (state === 'workerSuccess') {
+      // Upsert User with Name and Location collected during the worker track
       const user = await this.prisma.user.upsert({
         where: { phone },
-        create: { phone, role: Role.WORKER },
-        update: { role: Role.WORKER },
+        create: { 
+          phone, 
+          fullName: this.readString(data, 'fullName'),
+          location: this.readString(data, 'location'),
+          role: Role.WORKER 
+        },
+        update: { 
+          fullName: this.readString(data, 'fullName'),
+          location: this.readString(data, 'location'),
+          role: Role.WORKER 
+        },
       });
-
+  
+      // Upsert Worker profile details linked to the user account
       await this.prisma.worker.upsert({
         where: { userId: user.id },
         create: {
@@ -170,14 +182,26 @@ export class UssdService {
         },
       });
     }
-
+  
+    // --- 2. JOB POSTING SUCCESS (REQUEST A FUNDI) ---
     if (state === 'jobPosted') {
+      // Find or create customer account mapping
+      const user = await this.prisma.user.upsert({
+        where: { phone },
+        create: { 
+          phone,
+          role: Role.CUSTOMER // Default or fallback role mapping
+        },
+        update: {}, // Don't wipe their name if they already exist
+      });
+  
+      // Create the Job entity record
       await this.prisma.job.create({
         data: {
-          customer: { connectOrCreate: { where: { phone }, create: { phone, role: Role.CUSTOMER } } },
-          skillNeeded: this.readString(data, 'matchedSkill'),
+          customerId: user.id,
+          skillNeeded: this.readString(data, 'matchedSkill'), 
           location: this.readString(data, 'jobLocation'),
-          description: 'Requested via USSD',
+          description: 'Requested via USSD dynamic DB lookup',
         },
       });
     }
