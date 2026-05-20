@@ -38,6 +38,12 @@ model User {
   jobs          Job[]
 }
 
+model Skill {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "Plumber", "Mason (Fundi wa Mawe)"
+  createdAt DateTime @default(now())
+}  
+
 model Worker {
   id         String   @id @default(cuid())
   userId     String   @unique
