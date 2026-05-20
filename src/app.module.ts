@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseConfig } from './config/database.config';
 import { PrismaModule } from './prisma/prisma.module';
 import { UssdModule } from './ussd/ussd.module';
+import { UsersModule } from './users/users.module';
 import { WorkerModule } from './worker/worker.module';
 
 @Module({
@@ -13,6 +14,7 @@ import { WorkerModule } from './worker/worker.module';
     PrismaModule,
     WorkerModule,
     UssdModule,
+    UsersModule,
   ],
 })
 export class AppModule {}
