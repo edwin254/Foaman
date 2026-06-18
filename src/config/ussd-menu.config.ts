@@ -1,4 +1,6 @@
-export type UssdStepType = 'input' | 'choice' | 'final' | 'dynamic-lookup';
+export type UssdStepType = 'input' | 'choice' | 'final' | 'dynamic-lookup' | 'payment';
+
+export type PaymentActionKey = 'JOB_POSTING' | 'WORKER_VERIFICATION' | 'SUPPLIER_LISTING';
 
 export interface UssdMenuScreen {
   text: string;
@@ -6,6 +8,8 @@ export interface UssdMenuScreen {
   options?: Record<number, string>;
   next?: string;
   property?: string;
+  paymentAction?: PaymentActionKey;
+  amount?: number;
 }
 
 export const ussdMenus: Record<string, UssdMenuScreen> = {
@@ -149,6 +153,13 @@ export const ussdMenus: Record<string, UssdMenuScreen> = {
     text: "Enter job location:",
     type: "input",
     property: "jobLocation",
+    next: "jobPayment"
+  },
+  jobPayment: {
+    text: "Pay KES 50 via M-Pesa to post your Fundi request.\nWe will send a prompt to your phone.",
+    type: "payment",
+    paymentAction: "JOB_POSTING",
+    amount: 50,
     next: "jobPosted"
   },
   jobPosted: {

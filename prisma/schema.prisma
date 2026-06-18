@@ -25,6 +25,19 @@ enum JobStatus {
   CANCELLED
 }
 
+enum PaymentActionType {
+  JOB_POSTING
+  WORKER_VERIFICATION
+  SUPPLIER_LISTING
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
 model User {
   id          String   @id @default(cuid())
   phone       String   @unique
@@ -61,5 +74,23 @@ model Job {
   location    String
   description String
   status      JobStatus @default(PENDING)
+  paymentId   String?  @unique
+  payment     Payment? @relation(fields: [paymentId], references: [id])
+}
+
+model Payment {
+  id                String             @id @default(cuid())
+  phone             String
+  amount            Decimal            @db.Decimal(10, 2)
+  actionType        PaymentActionType
+  status            PaymentStatus      @default(PENDING)
+  mpesaReceipt      String?
+  checkoutRequestId String?            @unique
+  merchantRequestId String?
+  sessionId         String?
+  metadata          Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  job               Job?
 }
 

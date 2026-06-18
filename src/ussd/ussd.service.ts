@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Role } from '@prisma/client';
+import { PaymentActionType, Role } from '@prisma/client';
 import { ussdMenus } from '../config/ussd-menu.config';
+import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStoreService } from './session-store.service';
 
@@ -9,6 +10,7 @@ export class UssdService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: SessionStoreService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   async processRequest(sessionId: string, phone: string, text: string): Promise<string> {
@@ -62,6 +64,19 @@ export class UssdService {
     if (!nextScreen) {
       await this.cache.delete(sessionId);
       return 'END This option is not available right now. Please try again later.';
+    }
+
+    if (nextScreen.type === 'payment') {
+      const paymentResult = await this.paymentsService.initiatePayment({
+        phone,
+        actionType: nextScreen.paymentAction as PaymentActionType,
+        amount: nextScreen.amount,
+        sessionId,
+        metadata: session.data,
+      });
+
+      await this.cache.delete(sessionId);
+      return `END ${paymentResult.message}`;
     }
 
     if (nextScreen.type === 'final') {
@@ -184,26 +199,9 @@ export class UssdService {
     }
   
     // --- 2. JOB POSTING SUCCESS (REQUEST A FUNDI) ---
+    // Job posting is completed after M-Pesa payment via PaymentsService.
     if (state === 'jobPosted') {
-      // Find or create customer account mapping
-      const user = await this.prisma.user.upsert({
-        where: { phone },
-        create: { 
-          phone,
-          role: Role.CUSTOMER // Default or fallback role mapping
-        },
-        update: {}, // Don't wipe their name if they already exist
-      });
-  
-      // Create the Job entity record
-      await this.prisma.job.create({
-        data: {
-          customerId: user.id,
-          skillNeeded: this.readString(data, 'matchedSkill'), 
-          location: this.readString(data, 'jobLocation'),
-          description: 'Requested via USSD dynamic DB lookup',
-        },
-      });
+      return;
     }
   }
 
