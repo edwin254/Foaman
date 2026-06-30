@@ -1,6 +1,6 @@
 # Foaman Backend – Worker Flow
 
-NestJS backend for Foaman’s USSD worker-matching flow. It exposes a webhook for Africa’s Talking, drives multi-step menus from configuration, and matches customers with verified fundis.
+NestJS backend for Foaman’s USSD worker-matching flow. It exposes a webhook for Africa’s Talking, drives multi-step menus from configuration, matches customers with verified fundis, and collects payments via **M-Pesa STK Push** for paid actions (e.g. job posting).
 
 ## Architecture
 
@@ -17,9 +17,12 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
            │                    │                    ▼
            │            ussd-menu.config.ts    SmsService
            │                    │
-           └──────── handleFinalState ──────────┘
+           │                    ▼
+           │              PaymentsService ──STK Push──► Safaricom Daraja
+           │                    ▲
+           └──── payment step ──┘         POST /payments/mpesa/callback
                      │                    │
-                Prisma (Job, User, Skill)  TypeORM (workers)
+                Prisma (Job, User, Skill, Payment)  TypeORM (workers)
                      │                    │
                      └────── Postgres ──────┘
 ```
@@ -28,14 +31,18 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
 |-------|----------|----------------|
 | Entry | `src/main.ts` | Boots NestJS on port `3000` |
 | HTTP | `src/ussd/ussd.controller.ts` | `POST /ussd` (AT webhook), `POST /ussd/match` (dev API) |
+| Payments | `src/payments/payments.controller.ts` | `POST /payments/stk-push`, `POST /payments/mpesa/callback`, `GET /payments/:id` |
 | Onboarded users | `src/users/users.controller.ts` | `GET /onboarded` (no auth yet — dev/ops) |
-| USSD engine | `src/ussd/ussd.service.ts` | Session steps, `CON`/`END` responses |
-| Menu config | `src/config/ussd-menu.config.ts` | All USSD screens |
+| USSD engine | `src/ussd/ussd.service.ts` | Session steps, `CON`/`END` responses, payment step triggers |
+| Menu config | `src/config/ussd-menu.config.ts` | All USSD screens (including `payment` steps) |
+| Payment actions | `src/config/payment-actions.config.ts` | Amount + label per paid action type |
+| M-Pesa client | `src/payments/mpesa.service.ts` | Daraja OAuth, STK push, phone normalization |
+| Payment orchestration | `src/payments/payments.service.ts` | Initiate payment, handle callback, execute paid action |
 | Matching | `src/worker/services/worker.service.ts` | Fundi lookup, SMS, job assignment |
 | SMS | `src/common/services/sms.service.ts` | Africa’s Talking (logs only until wired) |
 | Sessions | `src/ussd/session-store.service.ts` | In-memory `Map` (Redis planned) |
 
-**Data access:** Prisma (`User`, `Skill`, `Worker`, `Job`) and TypeORM (`workers` table for matching) share one Postgres database. USSD worker signup uses TypeORM; job posting uses Prisma.
+**Data access:** Prisma (`User`, `Skill`, `Worker`, `Job`, `Payment`) and TypeORM (`workers` table for matching) share one Postgres database. USSD worker signup uses Prisma; job posting is created after a successful M-Pesa payment.
 
 ### Entry points
 
@@ -43,6 +50,9 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
 |--------|------|---------|
 | `POST` | `/ussd` | Africa’s Talking callback (`sessionId`, `phoneNumber`, `serviceCode`, `text`) |
 | `POST` | `/ussd/match` | Direct matching API (local/dev testing) |
+| `POST` | `/payments/stk-push` | Initiate M-Pesa STK Push for a paid action |
+| `POST` | `/payments/mpesa/callback` | Safaricom Daraja STK callback (must be public HTTPS) |
+| `GET` | `/payments/:id` | Look up payment status by ID |
 | `GET` | `/onboarded` | List USSD-onboarded users (`?role=CUSTOMER` optional). **No auth yet.** |
 
 ### Database schema (Prisma)
@@ -52,7 +62,12 @@ Africa's Talking ──POST──► HTTPS /ussd ──► NestJS :3000
 | `User` | `phone`, `fullName`, `location`, `role` |
 | `Skill` | `name` (unique catalog; populated via USSD lookup or optional `db:seed`) |
 | `Worker` | `userId`, `idNumber`, `skill`, `isVerified` |
-| `Job` | `customerId`, `skillNeeded`, `location`, `description`, `status` |
+| `Job` | `customerId`, `skillNeeded`, `location`, `description`, `status`, `paymentId` |
+| `Payment` | `phone`, `amount`, `actionType`, `status`, `mpesaReceipt`, `checkoutRequestId`, `metadata` |
+
+**Payment action types:** `JOB_POSTING`, `WORKER_VERIFICATION`, `SUPPLIER_LISTING`
+
+**Payment statuses:** `PENDING`, `SUCCESS`, `FAILED`, `CANCELLED`
 
 TypeORM `workers` table: `phone`, `fullName`, `skill`, `idNumber`, `verified`, `available`, `lastJobTimestamp`, ratings/counters.
 
@@ -81,6 +96,7 @@ TypeORM `workers` table: `phone`, `fullName`, `skill`, `idNumber`, `verified`, `
 | **Prisma client** | `npm run db:generate` (Node **≥ 20.19**, or Docker — see below) | Same, in CI/CD before `npm run build` |
 | **Run mode** | `npm run start:dev` or `docker compose up web` | `npm run build` then `npm run start` |
 | **SMS** | Logged to console | Real AT SMS API in `SmsService` |
+| **M-Pesa** | `MPESA_MOCK=true` auto-completes payments | Real Daraja credentials + public callback URL |
 
 ---
 
@@ -113,6 +129,16 @@ AFRICASTALKING_USERNAME=sandbox
 AFRICASTALKING_APIKEY=your_sandbox_api_key
 
 REDIS_URL=redis://localhost:6379
+
+# M-Pesa (set MPESA_MOCK=true for local dev without Daraja credentials)
+MPESA_ENV=sandbox
+MPESA_CONSUMER_KEY=your_consumer_key
+MPESA_CONSUMER_SECRET=your_consumer_secret
+MPESA_PASSKEY=your_lipa_na_mpesa_passkey
+MPESA_SHORTCODE=174379
+MPESA_CALLBACK_URL=https://<your-zrok2-host>/payments/mpesa/callback
+MPESA_TRANSACTION_TYPE=CustomerPayBillOnline
+MPESA_MOCK=true
 ```
 
 ### 2. Database (Docker)
@@ -224,6 +250,100 @@ Content-Type: application/json
 }
 ```
 
+**M-Pesa STK Push (direct API):**
+
+```http
+POST http://localhost:3000/payments/stk-push
+Content-Type: application/json
+
+{
+  "phone": "254712345678",
+  "actionType": "JOB_POSTING",
+  "metadata": {
+    "matchedSkill": "Plumber",
+    "jobLocation": "Roysambu"
+  }
+}
+```
+
+With `MPESA_MOCK=true`, the payment is auto-completed and the job is created immediately. Check status:
+
+```http
+GET http://localhost:3000/payments/<paymentId>
+```
+
+---
+
+## M-Pesa STK Push payments
+
+Paid actions are defined in `src/config/payment-actions.config.ts`:
+
+| Action type | Default amount (KES) | What happens on success |
+|-------------|----------------------|-------------------------|
+| `JOB_POSTING` | 50 | Creates a `Job` linked to the payment |
+| `WORKER_VERIFICATION` | 100 | Sets `Worker.isVerified = true` |
+| `SUPPLIER_LISTING` | 200 | Logged (supplier flow TBD) |
+
+### How it works
+
+1. **USSD or API** initiates payment with `phone`, `actionType`, optional `amount`, and `metadata` (session data such as skill and location).
+2. **`MpesaService`** sends an STK Push prompt to the user's phone via Safaricom Daraja.
+3. User enters M-Pesa PIN on their phone.
+4. **Safaricom** POSTs the result to `POST /payments/mpesa/callback`.
+5. **`PaymentsService`** marks the payment `SUCCESS` and runs the action handler (e.g. create job).
+
+Session data collected during USSD (skill, location, etc.) is stored in `Payment.metadata` so the callback can complete the action even after the USSD session ends.
+
+### USSD integration
+
+The **Request a Fundi** flow ends with a `payment` step instead of creating the job immediately:
+
+```
+jobSkillInput → jobSkillLookup → jobLocation → jobPayment (STK) → job created on callback
+```
+
+When the user reaches a `payment` screen, the USSD session ends with `END` and an M-Pesa prompt is sent to their phone.
+
+### Adding payment to another USSD action
+
+1. Add the action type to `prisma/schema.prisma` (`PaymentActionType` enum) and run `npm run db:push`.
+2. Register amount/label in `src/config/payment-actions.config.ts`.
+3. Add a handler in `PaymentsService.executePaidAction()`.
+4. Insert a `payment` step in `ussd-menu.config.ts` before the final screen:
+
+```ts
+workerPayment: {
+  text: "Pay KES 100 via M-Pesa to fast-track verification.\nWe will send a prompt to your phone.",
+  type: "payment",
+  paymentAction: "WORKER_VERIFICATION",
+  amount: 100,
+  next: "workerSuccess",
+},
+```
+
+5. Point the preceding step's `next` to your new payment screen (e.g. change `workerIdNumber.next` from `workerSuccess` to `workerPayment`).
+
+### M-Pesa environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `MPESA_ENV` | `sandbox` or `production` (selects Daraja base URL) |
+| `MPESA_CONSUMER_KEY` | Daraja app consumer key |
+| `MPESA_CONSUMER_SECRET` | Daraja app consumer secret |
+| `MPESA_PASSKEY` | Lipa Na M-Pesa Online passkey |
+| `MPESA_SHORTCODE` | Paybill or till number (sandbox default: `174379`) |
+| `MPESA_CALLBACK_URL` | Public HTTPS URL for STK callbacks |
+| `MPESA_TRANSACTION_TYPE` | `CustomerPayBillOnline` (Paybill) or `CustomerBuyGoodsOnline` (Till) |
+| `MPESA_MOCK` | `true` = skip Daraja, auto-complete payment (local dev only) |
+
+**Callback URL** must be reachable by Safaricom. In local dev, expose port 3000 with zrok2 and set:
+
+```
+MPESA_CALLBACK_URL=https://<your-zrok2-host>/payments/mpesa/callback
+```
+
+Register the same URL in the [Safaricom Daraja portal](https://developer.safaricom.co.ke/) for your app.
+
 ---
 
 ## Production setup
@@ -256,6 +376,15 @@ AFRICASTALKING_USERNAME=<production_username>
 AFRICASTALKING_APIKEY=<production_api_key>
 
 REDIS_URL=redis://<redis-host>:6379
+
+MPESA_ENV=production
+MPESA_CONSUMER_KEY=<daraja_consumer_key>
+MPESA_CONSUMER_SECRET=<daraja_consumer_secret>
+MPESA_PASSKEY=<lipa_na_mpesa_passkey>
+MPESA_SHORTCODE=<paybill_or_till>
+MPESA_CALLBACK_URL=https://<your-production-domain>/payments/mpesa/callback
+MPESA_TRANSACTION_TYPE=CustomerPayBillOnline
+# Do NOT set MPESA_MOCK in production
 ```
 
 ### 3. Database
@@ -285,7 +414,7 @@ npm run build
 npm run start
 ```
 
-Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` to port `3000`.
+Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` and `POST /payments/mpesa/callback` to port `3000`.
 
 ### 5. Africa’s Talking (production)
 
@@ -299,7 +428,15 @@ Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` to 
 3. Implement real SMS in `src/common/services/sms.service.ts` (replace console logging).
 4. Confirm responses use `CON` / `END` plain text as required by AT.
 
-### 6. Security and ops
+### 6. M-Pesa (production)
+
+1. Create a production app on the [Safaricom Daraja portal](https://developer.safaricom.co.ke/).
+2. Set `MPESA_CALLBACK_URL` to `https://<your-production-domain>/payments/mpesa/callback`.
+3. Whitelist the callback URL in Daraja and ensure TLS is valid.
+4. Use production shortcode, passkey, and consumer credentials.
+5. Never set `MPESA_MOCK=true` in production.
+
+### 7. Security and ops
 
 | Item | Recommendation |
 |------|----------------|
@@ -307,7 +444,8 @@ Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` to 
 | Secrets | Rotate `AFRICASTALKING_APIKEY` and DB passwords independently |
 | Logging | Log `sessionId` / `phoneNumber` carefully; avoid PII in public logs |
 | Health | Monitor process restarts and DB connectivity |
-| Dev endpoints | Restrict `GET /onboarded` and `POST /ussd/match` behind auth before production |
+| Dev endpoints | Restrict `GET /onboarded`, `POST /ussd/match`, and `POST /payments/stk-push` behind auth before production |
+| M-Pesa callbacks | Validate callback origin where possible; idempotent handling on `checkoutRequestId` |
 
 ---
 
@@ -319,7 +457,9 @@ Menus live in `src/config/ussd-menu.config.ts`.
 |------|----------|
 | `choice` | Numbered input routed via `options` |
 | `input` | Free text → `property`, then `next` |
-| `final` | Terminal screen → `END …` |
+| `dynamic-lookup` | DB skill search, numbered list, selection → `property` |
+| `payment` | Triggers M-Pesa STK Push (`paymentAction`, optional `amount`), then `END` |
+| `final` | Terminal screen → `END …` (side effects via `saveFinalPayload`) |
 
 Africa’s Talking rules:
 
@@ -346,6 +486,8 @@ trackAppResult: {
 ## Roadmap
 
 - Wire `SmsService` to Africa’s Talking (sandbox + production)
+- Payment confirmation SMS after successful STK push
 - Redis-backed USSD sessions
 - Unify Prisma `Worker` and TypeORM `workers`
-- Supplier and Ready-to-Occupy flows
+- Supplier and Ready-to-Occupy flows (with `SUPPLIER_LISTING` payment)
+- Auth on dev/ops and payment initiation endpoints
