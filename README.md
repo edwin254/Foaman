@@ -323,6 +323,16 @@ workerPayment: {
 
 5. Point the preceding step's `next` to your new payment screen (e.g. change `workerIdNumber.next` from `workerSuccess` to `workerPayment`).
 
+### Dynamic STK trigger design (flexible by action)
+
+STK Push is dynamic by design in this project:
+
+- Any USSD step can trigger STK by setting `type: "payment"` in `ussd-menu.config.ts`.
+- Amount is configurable per screen (`amount`) or falls back to action defaults in `payment-actions.config.ts`.
+- Business intent is configurable using `paymentAction` (`JOB_POSTING`, `WORKER_VERIFICATION`, `SUPPLIER_LISTING`, or new enums you add).
+- Callback handling is action-aware in `PaymentsService.executePaidAction()`.
+- This lets you attach payments to different USSD options without changing the core state engine.
+
 ### M-Pesa environment variables
 
 | Variable | Purpose |
@@ -436,7 +446,44 @@ Run behind nginx, Caddy, or a cloud load balancer that forwards `POST /ussd` and
 4. Use production shortcode, passkey, and consumer credentials.
 5. Never set `MPESA_MOCK=true` in production.
 
-### 7. Security and ops
+### 7. Production test plan (go-live checks)
+
+Run this checklist after deploying:
+
+1. **Health/config check**
+   - App boots cleanly (no Prisma startup errors).
+   - `MPESA_MOCK` is unset/false and `MPESA_ENV=production`.
+2. **USSD non-payment flow**
+   - Dial live code and complete one free path.
+   - Confirm expected `CON`/`END` responses and no session errors.
+3. **STK success flow**
+   - Trigger a paid USSD option.
+   - Confirm STK prompt appears on handset and payment is completed.
+   - Confirm callback received at `POST /payments/mpesa/callback` and payment status becomes `SUCCESS`.
+   - Confirm paid action side effect occurred (for example: `Job` record created for `JOB_POSTING`).
+4. **STK failure flow**
+   - Trigger STK and cancel/timeout on phone.
+   - Confirm payment status becomes `FAILED` and no paid action is applied.
+5. **Idempotency check**
+   - Re-send a previous callback payload once.
+   - Confirm no duplicate side-effects are created.
+
+### 8. Testing M-Pesa (sandbox and production)
+
+1. **Sandbox test**
+   - Use `MPESA_ENV=sandbox`.
+   - Set callback URL to a public endpoint: `https://<host>/payments/mpesa/callback`.
+   - Trigger via USSD payment step or `POST /payments/stk-push`.
+   - Verify `PENDING -> SUCCESS` and `PENDING -> FAILED` both work.
+2. **Local mock test**
+   - Set `MPESA_MOCK=true`.
+   - Trigger payment and confirm action executes immediately (no Daraja call).
+3. **Production smoke test**
+   - Use a low amount and approved test account/number.
+   - Verify callback receipt, status update, and exact business action output.
+   - Keep request/callback logs for audit.
+
+### 9. Security and ops
 
 | Item | Recommendation |
 |------|----------------|
